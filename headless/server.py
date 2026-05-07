@@ -1,5 +1,5 @@
 """
-headless/server.py — Transport-layer server
+headless/server.py — Full transport server with gap_04 (Windows TCP fallback) and gap_05 (RFC 7230 chunked) implemented
 """
 import json
 import sys
@@ -20,13 +20,11 @@ class HeadlessServer:
 
     def start(self) -> None:
         transport = self._config.get("headless", {}).get("transport", "http")
-
         transport_map = {
             "stdio": self._run_stdio,
             "http": self._run_http,
             "unix_socket": self._run_unix_socket,
         }
-
         run_fn = transport_map.get(transport, self._run_http)
         self._running = True
         self._orchestrator.running = True
@@ -46,7 +44,6 @@ class HeadlessServer:
                     break
                 payload = json.loads(line.decode("utf-8"))
                 method = payload.get("method", "")
-
                 if method == "infer":
                     result = orchestrator.infer(payload)
                     sys.stdout.write(json.dumps(result) + "\n")
@@ -69,7 +66,7 @@ class HeadlessServer:
                     sys.stdout.write(json.dumps({"error": f"Unknown method: {method}", "code": 404}) + "\n")
                     sys.stdout.flush()
             except json.JSONDecodeError as e:
-                sys.stdout.write(json.dumps({"error": str(e), "code": 400, "context": "json_decode"}) + "\n")
+                sys.stdout.write(json.dumps({"error": str(e), "code": 400}) + "\n")
                 sys.stdout.flush()
             except Exception:
                 break
@@ -78,7 +75,6 @@ class HeadlessServer:
         orchestrator = self._orchestrator
 
         class _HTTPHandler(BaseHTTPRequestHandler):
-
             _orchestrator = orchestrator
 
             def do_POST(self):
@@ -100,15 +96,29 @@ class HeadlessServer:
                     self.wfile.write(json.dumps(result).encode())
 
                 elif self.path == "/stream":
+                    # gap_05: RFC 7230 compliant chunked transfer encoding
                     self.send_response(200)
                     self.send_header("Transfer-Encoding", "chunked")
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
-                    for token in self._orchestrator.stream(payload):
-                        chunk = json.dumps({"token": token}).encode()
-                        self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+                    try:
+                        for token in self._orchestrator.stream(payload):
+                            chunk_data = json.dumps({"token": token}).encode("utf-8")
+                            # Write hex size + CRLF + data + CRLF
+                            self.wfile.write(
+                                f"{len(chunk_data):x}\r\n".encode()
+                                + chunk_data
+                                + b"\r\n"
+                            )
+                            self.wfile.flush()
+                        # Terminal zero-length chunk
+                        self.wfile.write(b"0\r\n\r\n")
                         self.wfile.flush()
-                    self.wfile.write(b"0\r\n\r\n")
+                    except Exception as e:
+                        err = json.dumps({"error": str(e)}).encode("utf-8")
+                        self.wfile.write(f"{len(err):x}\r\n".encode() + err + b"\r\n")
+                        self.wfile.write(b"0\r\n\r\n")
+                        self.wfile.flush()
 
                 elif self.path == "/weights":
                     result = self._orchestrator.get_weights()
@@ -130,17 +140,18 @@ class HeadlessServer:
                     self.wfile.write(json.dumps({"error": "Not found"}).encode())
 
             def log_message(self, format, *args):
-                pass  # suppress default access logs
+                pass
 
         port = self._config.get("headless", {}).get("port", 8765)
         server = HTTPServer(("0.0.0.0", port), _HTTPHandler)
         server.serve_forever()
 
     def _run_unix_socket(self) -> None:
+        # gap_04: Windows TCP fallback
         if sys.platform == "win32":
-            # TCP fallback on port+1 (gap_04)
             port = self._config.get("headless", {}).get("port", 8765) + 1
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("localhost", port))
         else:
             platform_key = "darwin" if sys.platform == "darwin" else "linux"
@@ -159,7 +170,12 @@ class HeadlessServer:
 
         while self._running:
             try:
-                conn, _ = sock.accept()
+                sock.settimeout(1.0)
+                try:
+                    conn, _ = sock.accept()
+                except socket.timeout:
+                    continue
+
                 data = b""
                 while True:
                     chunk = conn.recv(4096)
@@ -178,6 +194,9 @@ class HeadlessServer:
                     result = orchestrator.get_weights()
                 elif method == "set_weight":
                     result = orchestrator.set_weight(payload["key"], payload["value"])
+                elif method == "stream":
+                    tokens = list(orchestrator.stream(payload))
+                    result = {"tokens": tokens, "done": True}
                 else:
                     result = {"error": f"Unknown method: {method}", "code": 404}
 
