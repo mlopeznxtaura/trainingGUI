@@ -1,0 +1,10 @@
+# Adaptive Modular Inference GUI
+# Required: nicegui
+# Optional (install whichever framework you use):
+#   torch, torchvision (PyTorch)
+#   tensorflow (TensorFlow)
+#   jax, flax, orbax-checkpoint (JAX)
+#   onnxruntime (ONNX)
+#   llama-cpp-python (llama.cpp Python binding)
+
+nicegui>=1.4.0
