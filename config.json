@@ -1,8 +1,8 @@
 {
-  "_comment": "Adaptive Modular Inference GUI — single source of truth. No platform logic lives anywhere else.",
+  "_comment": "Adaptive Modular Inference GUI — single source of truth.",
 
   "framework": "auto",
-  "framework_priority": ["pytorch", "jax", "tensorflow", "onnx", "llamacpp", "custom_cpp"],
+  "framework_priority": ["pytorch", "jax", "tensorflow", "onnx", "llamacpp", "llm_provider", "custom_cpp"],
 
   "model_path": "~/models/default",
   "device": "auto",
@@ -14,51 +14,11 @@
   },
 
   "buttons": [
-    {
-      "id": "btn_run",
-      "label": "Run Inference",
-      "type": "trigger",
-      "target": "session.run",
-      "group": "inference"
-    },
-    {
-      "id": "toggle_stream",
-      "label": "Stream Tokens",
-      "type": "toggle",
-      "target": "session.stream_mode",
-      "default": true,
-      "group": "inference"
-    },
-    {
-      "id": "slider_temp",
-      "label": "Temperature",
-      "type": "slider",
-      "target": "model.temperature",
-      "min": 0.0,
-      "max": 2.0,
-      "step": 0.05,
-      "default": 0.7,
-      "group": "weights"
-    },
-    {
-      "id": "slider_top_p",
-      "label": "Top-P",
-      "type": "slider",
-      "target": "model.top_p",
-      "min": 0.0,
-      "max": 1.0,
-      "step": 0.01,
-      "default": 0.9,
-      "group": "weights"
-    },
-    {
-      "id": "toggle_headless",
-      "label": "Headless Server",
-      "type": "toggle",
-      "target": "headless.enabled",
-      "default": false,
-      "group": "system"
-    }
+    {"id": "btn_run", "label": "Run Inference", "type": "trigger", "target": "session.run", "group": "inference"},
+    {"id": "toggle_stream", "label": "Stream Tokens", "type": "toggle", "target": "session.stream_mode", "default": true, "group": "inference"},
+    {"id": "slider_temp", "label": "Temperature", "type": "slider", "target": "model.temperature", "min": 0.0, "max": 2.0, "step": 0.05, "default": 0.7, "group": "weights"},
+    {"id": "slider_top_p", "label": "Top-P", "type": "slider", "target": "model.top_p", "min": 0.0, "max": 1.0, "step": 0.01, "default": 0.9, "group": "weights"},
+    {"id": "toggle_headless", "label": "Headless Server", "type": "toggle", "target": "headless.enabled", "default": false, "group": "system"}
   ],
 
   "headless": {
@@ -66,7 +26,16 @@
     "transport": "http",
     "port": 8765,
     "endpoint": "/infer",
-    "unix_socket_name": "aig.sock"
+    "unix_socket_name": "aig.sock",
+    "stdio_cmd": []
+  },
+
+  "headless_llm": {
+    "enabled": false,
+    "base_url": "http://localhost:11434",
+    "model": "llama3",
+    "api_key_env": "",
+    "api_key": ""
   },
 
   "output": {
@@ -75,18 +44,9 @@
   },
 
   "os_paths": {
-    "linux": {
-      "lib_search": ["/usr/lib", "/usr/local/lib", "~/.local/lib"],
-      "socket_dir": "/tmp"
-    },
-    "darwin": {
-      "lib_search": ["/usr/local/lib", "/opt/homebrew/lib", "~/.local/lib"],
-      "socket_dir": "/tmp"
-    },
-    "windows": {
-      "lib_search": ["C:/Windows/System32", "C:/Program Files/lib"],
-      "socket_dir": null
-    }
+    "linux":   {"lib_search": ["/usr/lib", "/usr/local/lib", "~/.local/lib"], "socket_dir": "/tmp"},
+    "darwin":  {"lib_search": ["/usr/local/lib", "/opt/homebrew/lib", "~/.local/lib"], "socket_dir": "/tmp"},
+    "windows": {"lib_search": ["C:/Windows/System32", "C:/Program Files/lib"], "socket_dir": null}
   },
 
   "custom_engine_path": null
