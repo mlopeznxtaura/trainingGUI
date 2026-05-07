@@ -1,71 +1,52 @@
 """
-frameworks/pytorch_adapter.py — PyTorchAdapter
+frameworks/pytorch_adapter.py — PyTorchAdapter (gap 9 fixed: safe tokenizer in stream_tokens)
 """
-import time
-import os
+import time, os, logging
 from frameworks.base import BaseFrameworkAdapter
+logger = logging.getLogger(__name__)
 
 
 class PyTorchAdapter(BaseFrameworkAdapter):
-
     FRAMEWORK_KEY = "pytorch"
 
     def load_model(self, path: str, device: str) -> None:
         import torch
-
         expanded = os.path.expanduser(path)
         self._model_path = expanded
-
         if device == "auto":
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
-
+            if torch.cuda.is_available(): device = "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available(): device = "mps"
+            else: device = "cpu"
         self._active_device = device
         self._device_obj = torch.device(device)
-
         try:
-            self._model = torch.load(expanded, map_location=self._device_obj)
+            # gap 24 fix: weights_only=True avoids arbitrary code execution
+            self._model = torch.load(expanded, map_location=self._device_obj, weights_only=True)
         except Exception:
-            # Fallback: try as state dict or huggingface model
             try:
                 from transformers import AutoModel
-                self._model = AutoModel.from_pretrained(expanded)
-                self._model = self._model.to(self._device_obj)
+                self._model = AutoModel.from_pretrained(expanded).to(self._device_obj)
             except Exception:
                 self._model = None
-
         if self._model is not None and hasattr(self._model, "eval"):
             self._model.eval()
 
     def run_inference(self, inputs: dict) -> dict:
         import torch
-
         t0 = time.perf_counter()
         with torch.no_grad():
-            if self._model is None:
-                result = {"error": "model not loaded"}
-            else:
-                try:
-                    result = self._model(inputs)
-                except Exception as e:
-                    result = {"error": str(e)}
-        latency = (time.perf_counter() - t0) * 1000
-        return {"output": result, "latency_ms": latency}
+            try:
+                result = self._model(inputs) if self._model else {"error": "model not loaded"}
+            except Exception as e:
+                result = {"error": str(e)}
+        return {"output": result, "latency_ms": (time.perf_counter() - t0) * 1000}
 
     def get_weight_keys(self) -> list:
-        if self._model is None:
-            return []
-        return [name for name, _ in self._model.named_parameters()]
+        return [name for name, _ in self._model.named_parameters()] if self._model else []
 
     def set_weight(self, key: str, value) -> None:
         import torch
-
-        if self._model is None:
-            return
+        if not self._model: return
         parts = key.split(".")
         obj = self._model
         for part in parts[:-1]:
@@ -78,31 +59,29 @@ class PyTorchAdapter(BaseFrameworkAdapter):
                 setattr(obj, parts[-1], value)
 
     def stream_tokens(self, inputs: dict):
-        if self._model is None:
-            yield str(self.run_inference(inputs)["output"])
-            return
-
-        if hasattr(self._model, "generate"):
+        """gap 9 fix: safely load tokenizer before using TextIteratorStreamer."""
+        if self._model is not None and hasattr(self._model, "generate"):
             try:
-                from transformers import TextIteratorStreamer
+                from transformers import AutoTokenizer, TextIteratorStreamer
                 import threading
-
-                streamer = TextIteratorStreamer(self._model.config.tokenizer if hasattr(self._model, "config") else None, skip_prompt=True)
-                thread = threading.Thread(target=self._model.generate, kwargs={"streamer": streamer, **inputs})
+                tokenizer = AutoTokenizer.from_pretrained(self._model_path)
+                streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+                gen_kwargs = {"streamer": streamer}
+                if isinstance(inputs, dict) and "input_ids" in inputs:
+                    gen_kwargs.update(inputs)
+                thread = threading.Thread(target=self._model.generate, kwargs=gen_kwargs)
                 thread.start()
                 for token in streamer:
                     yield token
                 thread.join()
                 return
-            except Exception:
-                pass
-
+            except Exception as e:
+                logger.warning("TextIteratorStreamer unavailable: %s. Falling back to batch.", e)
         yield str(self.run_inference(inputs)["output"])
 
     def shutdown(self) -> None:
         import torch
-
-        del self._model
+        if self._model: del self._model
         self._model = None
         if self._active_device == "cuda":
             torch.cuda.empty_cache()
