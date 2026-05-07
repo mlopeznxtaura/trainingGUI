@@ -1,0 +1,148 @@
+{
+  "gaps": [
+    {
+      "id": "gap_01",
+      "title": "Multi-node session sharding",
+      "description": "InferenceSession wraps a single adapter. Multi-node requires ShardedSession distributing inputs across N adapters and merging outputs.",
+      "tasks": [
+        {
+          "id": "gap_01_task_01",
+          "task": "Define ShardedSession extending InferenceSession with adapters list and shard_strategy field",
+          "test": "Instantiate with 2 mock adapters; assert run() returns merged output from both"
+        },
+        {
+          "id": "gap_01_task_02",
+          "task": "Implement round-robin and input-split strategies selectable via config",
+          "test": "4 inputs round-robin over 2 adapters; assert each adapter called exactly 2 times"
+        },
+        {
+          "id": "gap_01_task_03",
+          "task": "Merge streaming generators from multiple shards in interleaved order",
+          "test": "2 mock adapters each yield 3 tokens; assert consumer receives 6 tokens in alternating order"
+        }
+      ]
+    },
+    {
+      "id": "gap_02",
+      "title": "Weight introspection UI",
+      "description": "Left panel has an empty expansion placeholder. get_weight_keys() output is not rendered or editable.",
+      "tasks": [
+        {
+          "id": "gap_02_task_01",
+          "task": "Populate ui.expansion in left_panel.py with rows from session.adapter.get_weight_keys()",
+          "test": "Mock adapter returns 3 keys; assert 3 rows rendered inside expansion"
+        },
+        {
+          "id": "gap_02_task_02",
+          "task": "Add inline ui.input per row; on change dispatch apply_weight with parsed value",
+          "test": "Simulate input change on 'layer.0.weight'; assert apply_weight called with correct args"
+        }
+      ]
+    },
+    {
+      "id": "gap_03",
+      "title": "JAX frozen param tree set_weight",
+      "description": "JAX pytrees are immutable. set_weight must rebuild the frozen param dict rather than mutate in-place.",
+      "tasks": [
+        {
+          "id": "gap_03_task_01",
+          "task": "Use jax.tree_util to rebuild frozen param dict with updated leaf at dot-notation key path",
+          "test": "2-level nested param dict; set_weight('layer.bias', 0.5); assert new dict correct, original unchanged"
+        },
+        {
+          "id": "gap_03_task_02",
+          "task": "Store updated params on adapter instance; confirm next run_inference uses them",
+          "test": "set_weight then run_inference; assert apply_fn received updated params"
+        }
+      ]
+    },
+    {
+      "id": "gap_04",
+      "title": "Windows Unix socket TCP fallback",
+      "description": "Unix socket transport references a Windows TCP fallback but the implementation is unwritten in both server.py and client.py.",
+      "tasks": [
+        {
+          "id": "gap_04_task_01",
+          "task": "In server.py _run_unix_socket: if sys.platform == 'win32', bind TCP socket on port+1 instead of AF_UNIX",
+          "test": "Mock sys.platform='win32'; assert TCP socket created on expected port"
+        },
+        {
+          "id": "gap_04_task_02",
+          "task": "Apply same detection and fallback in client.py unix_socket transport",
+          "test": "Mock sys.platform='win32' on client; assert connects via TCP not AF_UNIX"
+        }
+      ]
+    },
+    {
+      "id": "gap_05",
+      "title": "HTTP chunked streaming — full RFC 7230 framing",
+      "description": "stdlib http.server requires manual chunked Transfer-Encoding. Both server write path and client read path need explicit chunk framing.",
+      "tasks": [
+        {
+          "id": "gap_05_task_01",
+          "task": "Server /stream handler: write hex-length prefixed chunks per RFC 7230, terminate with 0-length chunk",
+          "test": "Mock adapter yields 3 tokens; assert response body is valid chunked encoding with terminal chunk"
+        },
+        {
+          "id": "gap_05_task_02",
+          "task": "Client stream(): parse chunked response by reading chunk sizes, assemble token strings",
+          "test": "Feed correctly-formed chunked response; assert 3 tokens yielded in order"
+        }
+      ]
+    },
+    {
+      "id": "gap_06",
+      "title": "custom_cpp_adapter manifest schema and loader",
+      "description": "CustomCppAdapter references manifest.json for ctypes signatures but schema and loader are unimplemented.",
+      "tasks": [
+        {
+          "id": "gap_06_task_01",
+          "task": "Define manifest.json schema: functions[]{name,argtypes,restype}, weight_keys[], input_format, output_format",
+          "test": "Load sample manifest; assert all fields parse and argtypes resolve to ctypes types"
+        },
+        {
+          "id": "gap_06_task_02",
+          "task": "In load_model: read manifest.json from binary directory, set ctypes argtypes/restype dynamically",
+          "test": "Mock cdll + manifest with one function 'run'; assert argtypes set correctly on function handle"
+        },
+        {
+          "id": "gap_06_task_03",
+          "task": "get_weight_keys(): call binary 'get_weight_names' symbol if present, else fall back to manifest weight_keys",
+          "test": "Manifest weight_keys=['w1','w2'], no binary symbol; assert returns ['w1','w2']"
+        }
+      ]
+    },
+    {
+      "id": "gap_07",
+      "title": "Headless LLM any-provider integration",
+      "description": "headless/server.py routes to InferenceSession which uses installed framework adapters. A provider-agnostic headless LLM path (Ollama, llama-server, any OpenAI-compatible local endpoint) is not wired.",
+      "tasks": [
+        {
+          "id": "gap_07_task_01",
+          "task": "Add config key 'headless_llm': {enabled, base_url, model, api_key_env} where api_key_env is optional env var name",
+          "test": "Load config with headless_llm block; assert all keys parsed without error"
+        },
+        {
+          "id": "gap_07_task_02",
+          "task": "Create core/llm_client.py: LLMClient(config) with infer(prompt) and stream(prompt) using urllib.request to POST to base_url/v1/chat/completions",
+          "test": "Mock urllib response returning {choices:[{message:{content:'hi'}}]}; assert infer() returns 'hi'"
+        },
+        {
+          "id": "gap_07_task_03",
+          "task": "stream() reads SSE lines ('data: {...}'), parses delta content, yields token strings, stops on 'data: [DONE]'",
+          "test": "Feed 3 SSE lines + DONE sentinel to stream(); assert 3 tokens yielded and generator exhausts"
+        },
+        {
+          "id": "gap_07_task_04",
+          "task": "Wire LLMClient into HeadlessOrchestrator: if config headless_llm.enabled, route infer/stream calls to LLMClient instead of session adapter",
+          "test": "Orchestrator with headless_llm enabled + mock LLMClient; assert infer() calls LLMClient.infer not session.run"
+        },
+        {
+          "id": "gap_07_task_05",
+          "task": "Expose headless_llm status in left panel status_dot alongside headless server dot",
+          "test": "Config headless_llm.enabled=true; assert second status dot rendered with correct label"
+        }
+      ]
+    }
+  ]
+}
